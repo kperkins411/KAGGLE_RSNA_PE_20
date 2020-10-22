@@ -16,7 +16,7 @@ import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 # You can write up to 5GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using "Save & Run All" 
 # You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current sessionb
 import pandas as pd
-
+import os
 class config:
     '''
     configuration information
@@ -27,7 +27,30 @@ class config:
     numb_classes =14
     resume = False
     epochs = 10
-    MODEL_PATH = 'log/cpt/resnet18_best.pth'
+    MODEL_PATH ='log/cpt'
+    if not os.path.exists(MODEL_PATH):
+        os.makedirs(MODEL_PATH)
+    MODEL_PARAMS_LOC = os.path.join(MODEL_DIR,'resnet18_best.pth')
+
+    df_cols={
+    'StudyInstanceUID':     0,    # - unique ID for each study(exam) in the data.
+    'SeriesInstanceUID':    1,   # - unique ID for each series within the study.
+    'SOPInstanceUID':       2,    # - unique ID for each image within the study ( and data).
+    'pe_present_on_image':  3, # - image-level, notes whether any form of PE is present on the image.
+    'negative_exam_for_pe': 4, # - exam-level, whether there are any images in the study that have PE present.
+    'qa_motion':            5,     # - informational, indicates whether radiologists noted an issue with motion in the study.
+    'qa_contrast':          6,   # - informational, indicates whether radiologists noted an issue with contrast in the study.
+    'flow_artifact':        7, # - informational
+    'rv_lv_ratio_gte_1':    8, # - exam-level, indicates whether the RV / LV ratio present in the study is >= 1
+    'rv_lv_ratio_lt_1':     9,  # - exam-level, indicates whether the RV / LV ratio present in the study is < 1
+    'leftsided_pe':         10, #- exam-level, indicates that there is PE present on the left side of the images in the study
+    'chronic_pe':           11, #- exam-level, indicates that the PE in the study is chronic
+    'true_filling_defect_not_pe': 12, # - informational, indicates a defect that is NOT PE
+    'rightsided_pe':        13, # - exam-level, indicates that there is PE present on the right side of the images in the study
+    'acute_and_chronic_pe': 14, # - exam-level, indicates that the PE present in the study is both acute AND chronic
+    'central_pe':           15, # - exam-level, indicates that there is PE present in the center of the images in the study
+    'indeterminate':        16  # -exam-level, indicates that while the study is not negative for PE, an ultimate set of exam-level labels could not be created, due to QA issues
+    }
 
 def reduce_mem_usage(df):
     """ iterate through all the columns of a dataframe and modify the data type
@@ -69,10 +92,16 @@ def reduce_mem_usage(df):
     return df
 
 class SInstUID_tracker():
-    index_col = ['StudyInstanceUID']
-    exam_level_features = ['negative_exam_for_pe', 'rv_lv_ratio_gte_1', 'rv_lv_ratio_lt_1',
-                           'leftsided_pe', 'chronic_pe', 'rightsided_pe',
-                           'acute_and_chronic_pe', 'central_pe', 'indeterminate']
+    index_col = config.df_cols['StudyInstanceUID']
+    exam_level_features = [ config.df_cols['negative_exam_for_pe'],
+                            config.df_cols['rv_lv_ratio_gte_1'],
+                            config.df_cols['rv_lv_ratio_lt_1'],
+                            config.df_cols['leftsided_pe'],
+                            config.df_cols['chronic_pe'],
+                            config.df_cols['rightsided_pe'],
+                            config.df_cols['acute_and_chronic_pe'],
+                            config.df_cols['central_pe'],
+                            config.df_cols['indeterminate']]
     def __init__(self,test_df, index_col=index_col, cols=exam_level_features, default_val=0.0):
         '''
         index: list, maincolumn to search for
