@@ -144,17 +144,24 @@ class SInstUID_tracker():
         pred: output of model
 
         '''
-        for index in self.df.index:
-            if self.df.loc[index,self.index_col] == studyid:
-                break
+        # for index in self.df.index:
+        #     if self.df.loc[index,self.index_col] == studyid:
+        #         break
+        index = np.flatnonzero([self.df[self.index_col] == studyid])
+        if(len(index)>1):
+            strindex = ' '.join([str(elem) for elem in index])
+            print("OH NO! "+ studyid + " found at indexs " + strindex)
+
+        index =index[0]
         for col in range(len(pred)):
             self.df.iloc[index, col+3 ] = np.maximum(self.df.iloc[0, col+3 ], pred[col])
 
     def getrow(self, studyid):
-        for index in self.df.index:
-            if self.df.loc[index, self.index_col] == studyid:
-                break
-        return self.df.loc[index]
+        index = np.flatnonzero([self.df[self.index_col] == studyid])
+        if (len(index) > 1):
+            strindex = ' '.join([str(elem) for elem in index])
+            print("OH NO! " + studyid + " found at indexs " + strindex)
+        return self.df.loc[index[0]]
 
 class ValMonitor():
     '''
