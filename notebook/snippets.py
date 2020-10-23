@@ -30,7 +30,8 @@ class config:
     MODEL_PATH ='log/cpt'
     if not os.path.exists(MODEL_PATH):
         os.makedirs(MODEL_PATH)
-    MODEL_PARAMS_LOC = os.path.join(MODEL_DIR,'resnet18_best.pth')
+    MODEL_PARAMS_LOC = os.path.join(MODEL_PATH,'resnet18_best.pth')
+    BAIL_AFTER_THIS_MANY_VALIDATION_INCREASES = 10
 
     df_cols={
     'StudyInstanceUID':     0,    # - unique ID for each study(exam) in the data.
@@ -91,9 +92,13 @@ def reduce_mem_usage(df):
     
     return df
 
+import pandas as pd
 class SInstUID_tracker():
-    index_col = config.df_cols['StudyInstanceUID']
-    exam_level_features = [ config.df_cols['negative_exam_for_pe'],
+    exam_level_cols = list(config.df_cols.keys())
+    index_col=exam_level_cols[0]
+
+    exam_level_col_numbers = [ config.df_cols['pe_present_on_image'],
+                            config.df_cols['negative_exam_for_pe'],
                             config.df_cols['rv_lv_ratio_gte_1'],
                             config.df_cols['rv_lv_ratio_lt_1'],
                             config.df_cols['leftsided_pe'],
@@ -102,7 +107,16 @@ class SInstUID_tracker():
                             config.df_cols['acute_and_chronic_pe'],
                             config.df_cols['central_pe'],
                             config.df_cols['indeterminate']]
-    def __init__(self,test_df, index_col=index_col, cols=exam_level_features, default_val=0.0):
+    #
+    # exam_level_col_names=['pe_present_on_image','negative_exam_for_pe','rv_lv_ratio_gte_1','rv_lv_ratio_lt_1' ]
+    # # now subtract 3 because we are not getting study, series and SOP columns in pred
+    # exam_level_col_numbers = [x-3 for x in exam_level_col_numbers]
+
+    #
+    # exam_level_col_names = {v: k for k, v in config.df_cols.items()}
+    # exam_level_col_names = {v: k for k, v in config.df_cols.items()}
+
+    def __init__(self,test_df, index_col=index_col, col_numbers=exam_level_col_numbers, default_val=0.0):
         '''
         index: list, maincolumn to search for
         listOfStudyID: bunch of studies to put in index
@@ -111,14 +125,17 @@ class SInstUID_tracker():
 
         '''
         self.index_col = index_col
-        self.cols = cols
+        self.col_numbers = col_numbers
         self.default_val = default_val
-        self.all = self.index_col
-        self.all.extend(self.cols)
+        # self.all = self.index_col
+        # self.all.extend(self.cols)
+
+        self.exam_level_col_names = list(config.df_cols.keys())
+        # self.exam_level_col_names = [exam_level_cols[i] for i in SInstUID_tracker.exam_level_col_numbers]
 
         #get unique index_cols
-        self.listOfStudyID = test_df[self.index_col[0]].unique()
-        self.df = pd.Dataframe({self.index_col[0]: self.listOfStudyID}, columns=self.all)
+        self.listOfStudyID = test_df[self.index_col].unique()
+        self.df = pd.DataFrame({self.index_col: self.listOfStudyID}, columns=self.exam_level_col_names).fillna(self.default_val)
 
     def record(self, studyid, pred):
         '''
@@ -127,11 +144,17 @@ class SInstUID_tracker():
         pred: output of model
 
         '''
-        for i, col in enumerate(self.cols):
-            self.df.loc[studyid, col] = np.maximun(df.loc[studyid, col], pred[i])
+        for index in self.df.index:
+            if self.df.loc[index,self.index_col] == studyid:
+                break
+        for col in range(len(pred)):
+            self.df.iloc[index, col+3 ] = np.maximum(self.df.iloc[0, col+3 ], pred[col])
 
     def getrow(self, studyid):
-        return self.df.loc(studyid)
+        for index in self.df.index:
+            if self.df.loc[index, self.index_col] == studyid:
+                break
+        return self.df.loc[index]
 
 class ValMonitor():
     '''
@@ -176,3 +199,12 @@ class ValMonitor():
         :return:
         '''
         return self.should_stop_training
+
+    
+import time
+class timer_kp:
+    def __init__(self):
+        self._start_time=time.perf_counter()
+    def __call__(self):      
+        print(f"Elapsed time: {(time.perf_counter() - self._start_time):0.4f} seconds")
+    
