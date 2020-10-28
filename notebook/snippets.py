@@ -17,6 +17,24 @@ import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 # You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current sessionb
 import pandas as pd
 import os
+import torch
+import torch.nn as nn
+import torch.functional as F
+import torch.optim as optim
+import torchvision
+from torchvision import models
+from torchvision import transforms
+from torch.utils.data import Dataset,DataLoader
+import cv2
+# import albumentations as albu
+import functools
+import glob
+# from albumentations.pytorch.transforms import ToTensorV2
+
+from tqdm.auto import tqdm
+import gc
+from PIL import Image
+import pydicom
 class config:
     '''
     configuration information
@@ -31,6 +49,7 @@ class config:
     if not os.path.exists(MODEL_PATH):
         os.makedirs(MODEL_PATH)
     MODEL_PARAMS_LOC = os.path.join(MODEL_PATH,'resnet18_best.pth')
+    MODEL_PARAMS_NEW_LOC = os.path.join(MODEL_PATH,'resnet18_best_new.pth')
     BAIL_AFTER_THIS_MANY_VALIDATION_INCREASES = 10
 
     df_cols={
@@ -214,4 +233,130 @@ class timer_kp:
         self._start_time=time.perf_counter()
     def __call__(self):      
         print(f"Elapsed time: {(time.perf_counter() - self._start_time):0.4f} seconds")
+        
+transforms_train = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.Resize(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+])
+transforms_val = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+])
+
+class CTDatasetJPEG(Dataset):
+    def __init__(self,df,path,transforms=None,preprocessing=None,size=254,mode='val'):
+        
+        #get a numpy representation of the pandas dataframe
+        self.df_main = df.values
+        self.path = path
+        self.transforms = transforms
+        self.preprocessing = preprocessing
+        self.size=size
+    
+        #either use all the validation data as given
+        #or generate a balanced set
+        if mode=='val':
+            self.df = self.df_main
+        else:
+            self.generate_balanced_set()
+
+    def __getitem__(self, idx):
+        '''
+        returns the image and a label
+        '''
+        row = self.df[idx]   #row is a numpy.ndarray
+
+        #assummes there may be more than 1 but still just uses the first one (???)
+        img = cv2.imread(glob.glob(f'{self.path}/{row[0]}/{row[1]}/*{row[2]}.jpg')[0])
+        
+        #lets flip from BGR to RGB
+        img=cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+      
+        #get the last 14 values starting with pe_present_on_image, even the purely informational ones
+        label = row[3:].astype(int) 
+        
+        #TODO ?
+        label[2:] = label[2:] if label[0] == 1 else 0
+         
+        if self.transforms:
+            img = self.transforms(img)
+        if self.preprocessing:
+            img = self.preprocessing(img)         
+        return  row[0],row[2],img,torch.from_numpy(label)
+
+    def __len__(self):
+        return len(self.df)
+    
+    #this function gets a balanced set, 1/2 have pe_present_on_image=1, 1/2 have pe_present_on_image=0
+    #note that we discard a bunch of images that have no pe present
+    def generate_balanced_set(self):
+        df0 = self.df_main[self.df_main[:,config.df_cols['pe_present_on_image']]==0]
+        df1 = self.df_main[self.df_main[:,config.df_cols['pe_present_on_image']]==1]
+        np.random.shuffle(df0)
+        self.df = np.concatenate([df0[:len(df1)],df1],axis=0)
+
+IGNORE_THIS_VALUE=-1
+class CTDatasetDicom(Dataset):
+    def __init__(self,df,path,transforms=None,preprocess_to_train_format=None,size=254,mode='val'):
+        
+        #get a numpy representation of the pandas dataframe
+        self.df = df.values   
+        self.path = path
+        self.transforms = transforms
+#         self.preprocessing = preprocessing
+        self.preprocess_to_train_format = preprocess_to_train_format
+        self.size=size
+
+
+    #window just like we did on training set
+    def _window(self,img, WL=50, WW=350):
+        upper, lower = WL+WW//2, WL-WW//2
+        X = np.clip(img.copy(), lower, upper)
+        X = X - np.min(X)
+        X = X / np.max(X)
+        X = (X*255.0).astype('uint8')
+        return X
+
+    def __getitem__(self, idx):
+        row = self.df[idx] 
+#         print(row)
+          
+        #get the dicom data, preprocess it to the same format that we used in training
+        dcm_data = pydicom.dcmread(f"{self.path}/{row[0]}/{row[1]}/{row[2]}.dcm")
+        image = dcm_data.pixel_array * int(dcm_data.RescaleSlope) + int(dcm_data.RescaleIntercept)
+        image = np.stack([self._window(image, WL=-600, WW=1500),
+                          self._window(image, WL=40, WW=400),
+                          self._window(image, WL=100, WW=700)], 2)
+        
+#         if self.preprocessing:
+#             image = self.preprocessing(image)
+ 
+        if self.transforms:
+            image = self.transforms(image)
+            
+        #return study id and imageid
+        return row[0],row[2],image,IGNORE_THIS_VALUE
+
+    def __len__(self):
+        return len(self.df)
+    
+    #this function gets a balanced set, 1/2 have pe_present_on_image=1, 1/2 have pe_present_on_image=0
+    #note that we discard a bunch of images that have no pe present
+#     def generate_balanced_set(self):
+#         df0 = self.df_main[self.df_main[:,3]==0]
+#         df1 = self.df_main[self.df_main[:,3]==1]
+#         np.random.shuffle(df0)
+#         self.df = np.concatenate([df0[:len(df1)],df1],axis=0)
+        
+
+# def norm(img):
+#     img-=img.min()
+#     return img/img.max()
     
